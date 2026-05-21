@@ -26,6 +26,7 @@ from azure.ai.projects.models import (
     PromptAgentDefinition,
     WorkflowAgentDefinition,
 )
+from azure.core.exceptions import ResourceNotFoundError
 from azure.core.pipeline import PipelineRequest
 from azure.core.pipeline.policies import SansIOHTTPPolicy
 from azure.identity.aio import DefaultAzureCredential
@@ -63,7 +64,7 @@ You must ALWAYS respond with ONLY a valid JSON object — no explanation, no
 markdown, no code fences, no preamble. Just the raw JSON.
 
 Output format (exactly):
-{"needs_advisor": <bool>, "needs_calculator": <bool>, "needs_scheduler": <bool>, "needs_newsletter": <bool>, "response": <string>}
+{"needs_advisor": <bool>, "needs_calculator": <bool>, "needs_scheduler": <bool>, "needs_newsletter": <bool>, "needs_rate_intelligence": <bool>, "response": <string>}
 
 Routing rules:
 
@@ -87,25 +88,64 @@ Routing rules:
       "market intel", "latest VA news", "news summary", "mortgage news",
       "rate trends", "industry report".
 
+  needs_rate_intelligence = true when the query involves:
+    — current IRRRL rates, VA loan rate information, mortgage rate comparisons,
+      "what are the rates", "current VA rates", "rate intel", "rate data",
+      VA loan programs and pricing, or any rate-specific question.
+
 Multiple may be true for mixed queries (e.g. "Am I eligible AND show me my savings
 AND book Thursday").
 
 The "response" field:
-  — When ANY of the four flags is true, set "response" to "".
-  — When ALL four flags are false, the query is general or meta (e.g. "What can
+  — When ANY of the flags is true, set "response" to "".
+  — When ALL flags are false, the query is general or meta (e.g. "What can
     you do?", "Hello", "How does this work?"). In that case, write a friendly,
     concise answer in "response" describing what you can help with. Mention the
-    four capabilities:
+    five capabilities:
       1. Answer VA loan eligibility and guideline questions (grounded in official
          VA guidelines, lender products, and borrower FAQ)
       2. Calculate refinance savings (monthly savings, break-even, closing costs)
       3. Schedule an appointment with a loan officer and add it to your calendar
       4. Generate a weekly VA mortgage market intelligence digest
+      5. Provide current IRRRL and VA loan rate intelligence
     Keep it conversational and invite the Veteran to ask a specific question.
 
 Do NOT default to needs_advisor for general/meta queries. Only set needs_advisor
 to true when the Veteran is asking a substantive VA loan question.
 """
+
+
+async def _initialize_with_project_retry(
+    label: str,
+    init_coro,
+    *,
+    max_attempts: int = 4,
+    base_delay_seconds: float = 2.0,
+) -> None:
+    """
+    Retry agent initialization when Foundry project propagation is still in-flight.
+
+    Immediately after project creation, data-plane APIs can briefly return
+    `ResourceNotFoundError: Project not found`. This wrapper retries only that
+    transient condition and re-raises any other failure.
+    """
+    for attempt in range(1, max_attempts + 1):
+        try:
+            await init_coro()
+            return
+        except ResourceNotFoundError as exc:
+            is_project_not_found = "Project not found" in str(exc)
+            if (not is_project_not_found) or attempt == max_attempts:
+                raise
+            delay = base_delay_seconds * attempt
+            logger.warning(
+                "%s init hit transient 'Project not found' (attempt %d/%d). Retrying in %.1fs...",
+                label,
+                attempt,
+                max_attempts,
+                delay,
+            )
+            await asyncio.sleep(delay)
 
 
 async def main() -> None:
@@ -119,22 +159,42 @@ async def main() -> None:
     scheduler = SchedulerAgent()
     newsletter = NewsletterAgent()
 
+    # Required sub-agents: must succeed or deployment should fail.
     init_tasks = [
-        advisor.initialize(),
-        calculator.initialize(),
-        scheduler.initialize(),
-        newsletter.initialize(),
+        _initialize_with_project_retry("Advisor Agent", advisor.initialize),
+        _initialize_with_project_retry("Calculator Agent", calculator.initialize),
+        _initialize_with_project_retry("Scheduler Agent", scheduler.initialize),
+        _initialize_with_project_retry("Newsletter Agent", newsletter.initialize),
     ]
 
-    # Calendar agent requires manual Work IQ Calendar connection — skip if not configured
+    # Calendar agent is optional and depends on a manual Work IQ connection.
+    # If it is missing or invalid, continue deployment for all other agents.
     calendar: CalendarAgent | None = None
-    if os.environ.get("SCHEDULER_CALENDAR_ENDPOINT"):
+    calendar_endpoint = os.environ.get("SCHEDULER_CALENDAR_ENDPOINT")
+    calendar_connection = os.environ.get("SCHEDULER_CALENDAR_CONNECTION")
+    if calendar_endpoint and calendar_connection:
         calendar = CalendarAgent()
-        init_tasks.append(calendar.initialize())
+    elif calendar_endpoint or calendar_connection:
+        logger.warning(
+            "Calendar env is partially configured; skipping Calendar Agent registration. "
+            "Set both SCHEDULER_CALENDAR_ENDPOINT and SCHEDULER_CALENDAR_CONNECTION "
+            "to enable it."
+        )
     else:
         logger.info("SCHEDULER_CALENDAR_ENDPOINT not set — skipping Calendar Agent registration")
 
     await asyncio.gather(*init_tasks)
+
+    if calendar is not None:
+        try:
+            await _initialize_with_project_retry("Calendar Agent", calendar.initialize)
+        except Exception as exc:
+            logger.warning(
+                "Calendar Agent registration skipped (optional) due to error: %s",
+                exc,
+            )
+            calendar = None
+
     logger.info(
         "Sub-agents registered — advisor=%s, calculator=%s, scheduler=%s, newsletter=%s, calendar=%s",
         advisor.agent_version,
@@ -171,7 +231,7 @@ async def main() -> None:
 
     workflow_version = await client.agents.create_version(
         agent_name="va-loan-concierge-workflow",
-        description="VA Loan Concierge — multi-agent workflow (advisor + calculator + scheduler + newsletter + calendar)",
+        description="VA Loan Concierge — multi-agent workflow (advisor + calculator + scheduler + newsletter + calendar + rate-intelligence)",
         definition=WorkflowAgentDefinition(workflow=workflow_yaml),
     )
     logger.info(

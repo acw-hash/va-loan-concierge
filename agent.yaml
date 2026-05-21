@@ -1,0 +1,49 @@
+# ---------------------------------------------------------------------------
+# VA Loan Rate Intelligence — Foundry Hosted Agent Definition
+# ---------------------------------------------------------------------------
+# Used by `azd deploy` to build, push, and register the hosted agent version
+# in Microsoft Foundry. The platform pulls the image from ACR, provisions
+# a per-session VM sandbox, and exposes the Responses endpoint:
+#
+#   {project_endpoint}/agents/rate-intelligence-agent/endpoint/protocols/openai/v1/responses
+#
+# Deploy:
+#   azd deploy
+#
+# Invoke after deploy:
+#   azd ai agent invoke "What are the current IRRRL rates?"
+#
+# Stream live logs:
+#   azd ai agent monitor
+# ---------------------------------------------------------------------------
+
+kind: hosted
+name: rate-intelligence-agent
+
+protocols:
+  - protocol: responses
+    version: 1.0.0
+
+resources:
+  cpu: "0.5"
+  memory: 1Gi
+
+environment_variables:
+  # Model deployment used by the LangGraph LLM node
+  - name: AZURE_AI_MODEL_DEPLOYMENT_NAME
+    value: ${FOUNDRY_MODEL_DEPLOYMENT}
+
+  # Azure AI Search — reuses the same search service as the Advisor KB
+  - name: RATE_SEARCH_ENDPOINT
+    value: ${ADVISOR_SEARCH_ENDPOINT}
+
+  # Knowledge base index name for rate/news data
+  - name: RATE_KNOWLEDGE_BASE_NAME
+    value: ${ADVISOR_KNOWLEDGE_BASE_NAME}
+
+  # Optional Azure AI Search query key fallback for hosted runtime.
+  # Managed identity remains the primary auth path in code.
+  - name: RATE_SEARCH_API_KEY
+    value: ${RATE_SEARCH_API_KEY}
+  # Note: FOUNDRY_PROJECT_ENDPOINT, FOUNDRY_*, and AGENT_* are reserved
+  # and auto-injected by the Foundry platform at runtime.

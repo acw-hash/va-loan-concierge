@@ -43,6 +43,7 @@ from agents.calculator_agent import CalculatorAgent
 from agents.calendar_agent import CalendarAgent
 from agents.newsletter_agent import NewsletterAgent
 from agents.scheduler_agent import SchedulerAgent
+from agents.rate_intelligence_agent import RateIntelligenceAgent
 from api.conversation_state import (
     ConversationState,
     create_conversation,
@@ -94,8 +95,12 @@ agent(s) to invoke:
       "send me the digest", "what's happening in the market", "weekly update",
       "market intel", "latest VA news", "news summary".
 
+  Rate Intelligence Agent (needs_rate_intelligence: true)
+    — requests for information about IRRRL rates, VA loan programs, or other
+    VA mortgage-related topics.
+
 When asked to classify a query, respond with ONLY a valid JSON object:
-  {"needs_advisor": <bool>, "needs_calculator": <bool>, "needs_scheduler": <bool>, "needs_newsletter": <bool>, "response": <string>}
+  {"needs_advisor": <bool>, "needs_calculator": <bool>, "needs_scheduler": <bool>, "needs_newsletter": <bool>, "needs_rate_intelligence": <bool>, "response": <string>}
 
 Multiple may be true for mixed queries (e.g. "Am I eligible AND show me my savings
 AND book Thursday").
@@ -160,7 +165,7 @@ _GENERAL_RESPONSE = (
 )
 
 
-def _classify_hint(query: str) -> tuple[bool, bool, bool, bool, str]:
+def _classify_hint(query: str) -> tuple[bool, bool, bool, bool, bool, str]:
     """
     Keyword-based pre-classification for routing decisions.
     Returns general capabilities response when no keywords match.
@@ -170,9 +175,13 @@ def _classify_hint(query: str) -> tuple[bool, bool, bool, bool, str]:
     needs_calculator = any(kw in q for kw in _CALCULATOR_KEYWORDS)
     needs_scheduler = any(kw in q for kw in _SCHEDULER_KEYWORDS)
     needs_newsletter = any(kw in q for kw in _NEWSLETTER_KEYWORDS)
-    if not needs_advisor and not needs_calculator and not needs_scheduler and not needs_newsletter:
-        return False, False, False, False, _GENERAL_RESPONSE
-    return needs_advisor, needs_calculator, needs_scheduler, needs_newsletter, ""
+    needs_rate_intelligence = any(kw in q for kw in [
+        "irrrl rate", "va loan program", "va mortgage", "current rate",
+        "rate intel", "rate information", "mortgage rate",
+    ])
+    if not needs_advisor and not needs_calculator and not needs_scheduler and not needs_newsletter and not needs_rate_intelligence:
+        return False, False, False, False, False, _GENERAL_RESPONSE
+    return needs_advisor, needs_calculator, needs_scheduler, needs_newsletter, needs_rate_intelligence, ""
 
 
 def _route_label(
@@ -180,6 +189,7 @@ def _route_label(
     needs_calculator: bool,
     needs_scheduler: bool,
     needs_newsletter: bool,
+    needs_rate_intelligence: bool,
 ) -> str:
     agents = []
     if needs_advisor:
@@ -190,6 +200,8 @@ def _route_label(
         agents.append("Scheduler Agent")
     if needs_newsletter:
         agents.append("Newsletter Agent")
+    if needs_rate_intelligence:
+        agents.append("Rate Intelligence Agent")
     return " + ".join(agents) if agents else "Concierge (general)"
 
 
@@ -226,6 +238,7 @@ class Orchestrator:
         self._calendar: CalendarAgent | None = None
         self._newsletter: NewsletterAgent | None = None
         self._orchestrator_version: str | None = None
+        self.rate_intelligence_agent = RateIntelligenceAgent()
 
     # ── Client Setup ───────────────────────────────────────────────────────
 
@@ -263,6 +276,7 @@ class Orchestrator:
             self._scheduler.initialize(),
             self._calendar.initialize(),
             self._newsletter.initialize(),
+            self.rate_intelligence_agent.initialize(),
         )
         logger.info("orchestrator: sub-agents ready")
 
@@ -290,11 +304,11 @@ class Orchestrator:
     # the query.  The LLM returns a JSON object with three boolean flags
     # and an optional general response string.
 
-    async def _llm_classify(self, query: str) -> tuple[bool, bool, bool, bool, str]:
+    async def _llm_classify(self, query: str) -> tuple[bool, bool, bool, bool, bool, str]:
         """
         Use the orchestrator Foundry agent to classify routing via LLM inference.
 
-        Returns (needs_advisor, needs_calculator, needs_scheduler, needs_newsletter, response).
+        Returns (needs_advisor, needs_calculator, needs_scheduler, needs_newsletter, needs_rate_intelligence, response).
         When all four flags are false, ``response`` contains a general capabilities
         message from the LLM. Otherwise ``response`` is "".
 
@@ -312,7 +326,7 @@ class Orchestrator:
         classify_prompt = (
             "Classify the following Veteran's query. Respond with ONLY a JSON object "
             "with five fields — needs_advisor (bool), needs_calculator (bool), "
-            "needs_scheduler (bool), needs_newsletter (bool), and response (string) "
+            "needs_scheduler (bool), needs_newsletter (bool), needs_rate_intelligence (bool), and response (string) "
             "— and nothing else.\n\n"
             f'Query: "{query}"'
         )
@@ -340,13 +354,14 @@ class Orchestrator:
             needs_calculator = bool(data.get("needs_calculator", False))
             needs_scheduler = bool(data.get("needs_scheduler", False))
             needs_newsletter = bool(data.get("needs_newsletter", False))
+            needs_rate_intelligence = bool(data.get("needs_rate_intelligence", False))
             general_response = str(data.get("response", ""))
             logger.info(
                 "orchestrator: LLM routing — advisor=%s  calculator=%s  scheduler=%s  newsletter=%s  has_response=%s",
                 needs_advisor, needs_calculator, needs_scheduler, needs_newsletter,
                 bool(general_response),
             )
-            return needs_advisor, needs_calculator, needs_scheduler, needs_newsletter, general_response
+            return needs_advisor, needs_calculator, needs_scheduler, needs_newsletter, needs_rate_intelligence, general_response
         except Exception as exc:
             logger.warning(
                 "orchestrator: LLM classification failed, falling back to keywords: %s", exc
@@ -477,21 +492,21 @@ class Orchestrator:
             "orchestrator.classify",
             attributes={"query": query[:500]},
         ):
-            needs_advisor, needs_calculator, needs_scheduler, needs_newsletter, general_response = (
+            needs_advisor, needs_calculator, needs_scheduler, needs_newsletter, needs_rate_intelligence, general_response = (
                 await self._llm_classify(query)
             )
         state.needs_advisor = needs_advisor
         state.needs_calculator = needs_calculator
         state.needs_scheduler = needs_scheduler
         await save_conversation(state)
-        route_label = _route_label(needs_advisor, needs_calculator, needs_scheduler, needs_newsletter)
+        route_label = _route_label(needs_advisor, needs_calculator, needs_scheduler, needs_newsletter, needs_rate_intelligence)
         yield {
             "type": "orchestrator_route",
             "message": f"Routing to: {route_label}",
         }
 
         # ── General / meta query — respond directly, no sub-agents ─────
-        if not needs_advisor and not needs_calculator and not needs_scheduler and not needs_newsletter:
+        if not needs_advisor and not needs_calculator and not needs_scheduler and not needs_newsletter and not needs_rate_intelligence:
             response_text = general_response or _GENERAL_RESPONSE
             yield {
                 "type": "partial_response",
@@ -513,6 +528,8 @@ class Orchestrator:
             plan_agents.append("Calendar")
         if needs_newsletter:
             plan_agents.append("Newsletter Agent")
+        if needs_rate_intelligence:
+            plan_agents.append("Rate Intelligence Agent")
         yield {
             "type": "plan",
             "message": " → ".join(plan_agents),
@@ -601,6 +618,32 @@ class Orchestrator:
                     "agent": "newsletter",
                     "label": "Market Intelligence Digest",
                     "content": newsletter_text,
+                }
+
+        # ── Run rate intelligence agent ──────────────────────────────────
+        if needs_rate_intelligence:
+            if has_response:
+                yield {"type": "handoff", "message": "→ Rate Intelligence Agent"}
+            rate_text = ""
+            with tracer.start_as_current_span("agent.rate_intelligence"):
+                try:
+                    async for event in self.rate_intelligence_agent.run(enriched_query):
+                        if event["type"] == "_rate_text":
+                            rate_text = event.get("text", "")
+                        else:
+                            yield event
+                except Exception as exc:
+                    logger.exception("orchestrator: rate intelligence run raised unexpectedly")
+                    yield {"type": "error", "message": f"Rate Intelligence error: {exc}"}
+                    return
+
+            if rate_text:
+                has_response = True
+                yield {
+                    "type": "partial_response",
+                    "agent": "rate_intelligence",
+                    "label": "Rate Intelligence",
+                    "content": rate_text,
                 }
 
         # ── Continue with calculator + scheduler ─────────────────────────

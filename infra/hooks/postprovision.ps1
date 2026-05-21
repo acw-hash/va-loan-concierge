@@ -22,11 +22,16 @@ Write-Host "=== postprovision: Setting up knowledge base and Foundry connections
 
 $PROJECT_RESOURCE_ID = (azd env get-value FOUNDRY_PROJECT_RESOURCE_ID 2>$null)
 $SEARCH_ENDPOINT = (azd env get-value ADVISOR_SEARCH_ENDPOINT 2>$null)
+$SEARCH_SERVICE_NAME = (azd env get-value SEARCH_SERVICE_NAME 2>$null)
 $MCP_TOOLS_ENDPOINT = (azd env get-value MCP_TOOLS_ENDPOINT 2>$null)
 $STORAGE_ACCOUNT_NAME = (azd env get-value STORAGE_ACCOUNT_NAME 2>$null)
 $AI_SERVICES_NAME = (azd env get-value AI_SERVICES_NAME 2>$null)
 $EMBEDDING_MODEL = (azd env get-value EMBEDDING_MODEL_DEPLOYMENT 2>$null)
 if (-not $EMBEDDING_MODEL) { $EMBEDDING_MODEL = "text-embedding-3-small" }
+$CU_EMBEDDING_MODEL = (azd env get-value CU_EMBEDDING_MODEL_DEPLOYMENT 2>$null)
+if (-not $CU_EMBEDDING_MODEL) { $CU_EMBEDDING_MODEL = $EMBEDDING_MODEL }
+$CU_EMBEDDING_FALLBACKS = (azd env get-value CU_EMBEDDING_MODEL_FALLBACKS 2>$null)
+if (-not $CU_EMBEDDING_FALLBACKS) { $CU_EMBEDDING_FALLBACKS = "text-embedding-3-small,text-embedding-ada-002" }
 $AZURE_RESOURCE_GROUP = (azd env get-value AZURE_RESOURCE_GROUP 2>$null)
 $KNOWLEDGE_CONTAINER = (azd env get-value KNOWLEDGE_CONTAINER_NAME 2>$null)
 if (-not $KNOWLEDGE_CONTAINER) { $KNOWLEDGE_CONTAINER = "loan-guidelines" }
@@ -385,6 +390,27 @@ azd env set ADVISOR_KNOWLEDGE_BASE_NAME $KB_NAME
 azd env set ADVISOR_MCP_CONNECTION $ADVISOR_MCP_CONNECTION
 azd env set MCP_TOOLS_CONNECTION $MCP_TOOLS_CONNECTION
 
+# Hosted rate-intelligence agent fallback auth: set Search query key in azd env
+# so agent.yaml can inject RATE_SEARCH_API_KEY at deploy time.
+$RATE_SEARCH_API_KEY = ""
+if ($SEARCH_SERVICE_NAME -and $AZURE_RESOURCE_GROUP) {
+    try {
+        $RATE_SEARCH_API_KEY = (az search query-key list `
+            --service-name $SEARCH_SERVICE_NAME `
+            --resource-group $AZURE_RESOURCE_GROUP `
+            --query "[0].key" -o tsv 2>$null)
+    } catch {
+        $RATE_SEARCH_API_KEY = ""
+    }
+}
+
+if ($RATE_SEARCH_API_KEY) {
+    azd env set RATE_SEARCH_API_KEY $RATE_SEARCH_API_KEY
+    Write-Host "  RATE_SEARCH_API_KEY set in azd env"
+} else {
+    Write-Host "  WARNING: Could not resolve RATE_SEARCH_API_KEY from Search query keys"
+}
+
 # -- 10. Deploy MCP server Function App --
 # azd service deploy uses storage account keys which are blocked by policy.
 # Deploy via az CLI instead (uses Azure AD auth).
@@ -451,6 +477,7 @@ $azdValues = [ordered]@{
     "FOUNDRY_PROJECT_RESOURCE_ID"           = (azd env get-value FOUNDRY_PROJECT_RESOURCE_ID 2>$null)
     "ADVISOR_KNOWLEDGE_BASE_NAME"           = $KB_NAME
     "ADVISOR_SEARCH_ENDPOINT"               = $SEARCH_ENDPOINT
+    "RATE_SEARCH_API_KEY"                   = (azd env get-value RATE_SEARCH_API_KEY 2>$null)
     "ADVISOR_MCP_CONNECTION"                = $ADVISOR_MCP_CONNECTION
     "MCP_TOOLS_ENDPOINT"                    = $MCP_TOOLS_ENDPOINT
     "MCP_TOOLS_CONNECTION"                  = $MCP_TOOLS_CONNECTION
@@ -467,7 +494,8 @@ $azdValues = [ordered]@{
     "CU_ENDPOINT"                           = (azd env get-value AI_SERVICES_ENDPOINT 2>$null)
     "CU_COMPLETION_DEPLOYMENT"              = (azd env get-value FOUNDRY_MODEL_DEPLOYMENT 2>$null)
     "CU_MINI_MODEL_DEPLOYMENT"              = "gpt-4.1-mini"
-    "CU_LARGE_EMBEDDING_DEPLOYMENT"         = "text-embedding-3-large"
+    "CU_LARGE_EMBEDDING_DEPLOYMENT"         = $CU_EMBEDDING_MODEL
+    "CU_EMBEDDING_MODEL_FALLBACKS"          = $CU_EMBEDDING_FALLBACKS
     "CU_ANALYZER_NAME"                      = "vaMortgageNews"
     "CU_NEWS_BLOB_CONTAINER"                = "news-articles"
     "STORAGE_ACCOUNT_ENDPOINT"              = (azd env get-value STORAGE_ACCOUNT_ENDPOINT 2>$null)

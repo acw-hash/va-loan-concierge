@@ -56,6 +56,24 @@ param embeddingModelVersion string = '1'
 @description('Embedding deployment SKU capacity (in thousands of tokens per minute)')
 param embeddingCapacity int = 30
 
+@description('Deployment name used by Content Understanding for embeddings')
+param cuEmbeddingDeploymentName string = 'cu-embedding'
+
+@description('Primary CU embedding model. If unavailable in-region, deployment falls back automatically.')
+param cuEmbeddingPrimaryModelName string = 'text-embedding-3-large'
+
+@description('First CU embedding fallback model')
+param cuEmbeddingFallbackModelName string = 'text-embedding-3-small'
+
+@description('Second CU embedding fallback model (manual override option)')
+param cuEmbeddingSecondFallbackModelName string = 'text-embedding-ada-002'
+
+@description('CU embedding model version')
+param cuEmbeddingModelVersion string = '1'
+
+@description('CU embedding deployment SKU capacity (in thousands of tokens per minute)')
+param cuEmbeddingCapacity int = 20
+
 @description('AI Search SKU')
 @allowed(['basic', 'standard', 'standard2'])
 param searchSku string = 'basic'
@@ -74,6 +92,15 @@ resource rg 'Microsoft.Resources/resourceGroups@2024-03-01' = {
 }
 
 // ── Level 0: Independent foundational resources ─────────────────────────────
+
+module containerRegistry 'modules/container-registry.bicep' = {
+  name: 'containerRegistry'
+  scope: rg
+  params: {
+    environmentName: environmentName
+    location: location
+  }
+}
 
 module monitoring 'modules/monitoring.bicep' = {
   name: 'monitoring'
@@ -126,6 +153,12 @@ module aiServices 'modules/ai-services.bicep' = {
     embeddingModelName: embeddingModelName
     embeddingModelVersion: embeddingModelVersion
     embeddingCapacity: embeddingCapacity
+    cuEmbeddingDeploymentName: cuEmbeddingDeploymentName
+    cuEmbeddingPrimaryModelName: cuEmbeddingPrimaryModelName
+    cuEmbeddingFallbackModelName: cuEmbeddingFallbackModelName
+    cuEmbeddingSecondFallbackModelName: cuEmbeddingSecondFallbackModelName
+    cuEmbeddingModelVersion: cuEmbeddingModelVersion
+    cuEmbeddingCapacity: cuEmbeddingCapacity
     searchId: search.outputs.searchId
     searchEndpoint: search.outputs.searchEndpoint
   }
@@ -176,6 +209,7 @@ module rbac 'modules/rbac.bicep' = {
     functionAppPrincipalId: functionApp.outputs.functionAppPrincipalId
     cosmosAccountId: cosmosDb.outputs.cosmosAccountId
     cosmosAccountName: cosmosDb.outputs.cosmosAccountName
+    acrId: containerRegistry.outputs.acrId
   }
 }
 
@@ -183,6 +217,7 @@ module rbac 'modules/rbac.bicep' = {
 
 output AZURE_RESOURCE_GROUP string = rg.name
 output AZURE_LOCATION string = location
+output AZURE_TENANT_ID string = subscription().tenantId
 
 // Foundry
 output FOUNDRY_PROJECT_ENDPOINT string = aiProject.outputs.projectEndpoint
@@ -192,6 +227,8 @@ output FOUNDRY_PROJECT_RESOURCE_ID string = aiProject.outputs.projectId
 
 // Embedding model (used by Search indexer for vector search)
 output EMBEDDING_MODEL_DEPLOYMENT string = aiServices.outputs.embeddingModelName
+output CU_EMBEDDING_MODEL_DEPLOYMENT string = aiServices.outputs.cuEmbeddingDeploymentName
+output CU_EMBEDDING_MODEL_FALLBACKS string = aiServices.outputs.cuEmbeddingFallbackModels
 
 // AI Search / Knowledge Base
 output ADVISOR_SEARCH_ENDPOINT string = search.outputs.searchEndpoint
@@ -217,3 +254,7 @@ output COSMOS_ENDPOINT string = cosmosDb.outputs.cosmosEndpoint
 
 // Content Understanding (Phase 14)
 output AI_SERVICES_ENDPOINT string = aiServices.outputs.aiServicesEndpoint
+
+// Container Registry (hosted agents)
+output ACR_NAME string = containerRegistry.outputs.acrName
+output ACR_LOGIN_SERVER string = containerRegistry.outputs.acrLoginServer

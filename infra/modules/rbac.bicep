@@ -22,6 +22,7 @@ param userPrincipalId string = ''
 param functionAppPrincipalId string = ''
 param cosmosAccountId string = ''
 param cosmosAccountName string = ''
+param acrId string = ''
 
 // ── Well-known role definition IDs ──────────────────────────────────────────
 
@@ -35,6 +36,7 @@ var roles = {
   storageBlobDataOwner: 'b7e6dc6d-f1e8-4753-8033-0f276bb0955b'
   storageQueueDataContributor: '974c5e8b-45b9-4653-ba55-5f855dd0fb88'
   contributor: 'b24988ac-6180-42a0-ab88-20f7382dd24c'
+  acrPull: '7f951dda-4ed3-4680-a7ca-43fe172d538d'
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -277,6 +279,43 @@ resource userCosmosContributor 'Microsoft.DocumentDB/databaseAccounts/sqlRoleAss
     principalId: userPrincipalId
     roleDefinitionId: '${cosmosAccountId}/sqlRoleDefinitions/00000000-0000-0000-0000-000000000002'
     scope: cosmosAccountId
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CONTAINER REGISTRY
+// ═══════════════════════════════════════════════════════════════════════════
+
+// Project managed identity → ACR (pull hosted agent images at deploy time)
+resource projectAcrPull 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(acrId)) {
+  name: guid(acrId, projectPrincipalId, roles.acrPull)
+  scope: resourceGroup()
+  properties: {
+    principalId: projectPrincipalId
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roles.acrPull)
+    principalType: 'ServicePrincipal'
+  }
+}
+
+// AI Services managed identity → ACR (hosted agent runtime image pull)
+resource aiServicesAcrPull 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(acrId)) {
+  name: guid(acrId, aiServicesPrincipalId, roles.acrPull)
+  scope: resourceGroup()
+  properties: {
+    principalId: aiServicesPrincipalId
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roles.acrPull)
+    principalType: 'ServicePrincipal'
+  }
+}
+
+// User → ACR (local dev — push images)
+resource userAcrPush 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(acrId) && !empty(userPrincipalId)) {
+  name: guid(acrId, userPrincipalId, roles.acrPull)
+  scope: resourceGroup()
+  properties: {
+    principalId: userPrincipalId
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roles.contributor)
+    principalType: 'User'
   }
 }
 

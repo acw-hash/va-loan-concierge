@@ -124,6 +124,7 @@ class NewsletterAgent:
     """
 
     def __init__(self) -> None:
+        self._credential: DefaultAzureCredential | None = None
         self._project_client: AIProjectClient | None = None
         self._agent_version: str | None = None
 
@@ -135,9 +136,10 @@ class NewsletterAgent:
 
     def _get_project_client(self) -> AIProjectClient:
         if self._project_client is None:
+            self._credential = DefaultAzureCredential()
             self._project_client = AIProjectClient(
                 endpoint=os.environ["FOUNDRY_PROJECT_ENDPOINT"],
-                credential=DefaultAzureCredential(),
+                credential=self._credential,
             )
         return self._project_client
 
@@ -322,3 +324,6 @@ class NewsletterAgent:
         if self._project_client is not None:
             await self._project_client.close()
             self._project_client = None
+        if self._credential is not None:
+            await self._credential.close()
+            self._credential = None

@@ -19,11 +19,19 @@ param embeddingCapacity int = 30
 param miniModelName string = 'gpt-4.1-mini'
 param miniModelVersion string = '2025-04-14'
 param miniModelCapacity int = 20
-param largeEmbeddingModelName string = 'text-embedding-3-large'
-param largeEmbeddingModelVersion string = '1'
-param largeEmbeddingCapacity int = 20
+param cuEmbeddingDeploymentName string = 'cu-embedding'
+param cuEmbeddingPrimaryModelName string = 'text-embedding-3-large'
+param cuEmbeddingFallbackModelName string = 'text-embedding-3-small'
+param cuEmbeddingSecondFallbackModelName string = 'text-embedding-ada-002'
+param cuEmbeddingModelVersion string = '1'
+param cuEmbeddingCapacity int = 20
 param searchId string
 param searchEndpoint string
+
+var unsupportedLargeEmbeddingRegions = [
+  'westus'
+]
+var cuEmbeddingModelName = contains(unsupportedLargeEmbeddingRegions, toLower(location)) ? cuEmbeddingFallbackModelName : cuEmbeddingPrimaryModelName
 
 resource aiServices 'Microsoft.CognitiveServices/accounts@2025-04-01-preview' = {
   name: 'ais-${environmentName}'
@@ -140,20 +148,22 @@ resource miniModelDeployment 'Microsoft.CognitiveServices/accounts/deployments@2
   ]
 }
 
-// ── text-embedding-3-large deployment (required by Content Understanding) ────
+// ── Content Understanding embedding deployment ───────────────────────────────
+// In regions where text-embedding-3-large is unavailable (for example westus),
+// automatically fall back to text-embedding-3-small.
 
-resource largeEmbeddingDeployment 'Microsoft.CognitiveServices/accounts/deployments@2025-04-01-preview' = {
+resource cuEmbeddingDeployment 'Microsoft.CognitiveServices/accounts/deployments@2025-04-01-preview' = {
   parent: aiServices
-  name: largeEmbeddingModelName
+  name: cuEmbeddingDeploymentName
   sku: {
     name: 'Standard'
-    capacity: largeEmbeddingCapacity
+    capacity: cuEmbeddingCapacity
   }
   properties: {
     model: {
       format: 'OpenAI'
-      name: largeEmbeddingModelName
-      version: largeEmbeddingModelVersion
+      name: cuEmbeddingModelName
+      version: cuEmbeddingModelVersion
     }
   }
   dependsOn: [
@@ -182,3 +192,6 @@ output aiServicesName string = aiServices.name
 output aiServicesPrincipalId string = aiServices.identity.principalId
 output aiServicesEndpoint string = 'https://${aiServices.properties.customSubDomainName}.services.ai.azure.com/'
 output embeddingModelName string = embeddingModelName
+output cuEmbeddingModelName string = cuEmbeddingModelName
+output cuEmbeddingDeploymentName string = cuEmbeddingDeploymentName
+output cuEmbeddingFallbackModels string = '${cuEmbeddingFallbackModelName},${cuEmbeddingSecondFallbackModelName}'

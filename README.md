@@ -415,6 +415,26 @@ python evals/run_eval.py --cleanup             # delete old evals + files
 
 The script polls for completion and prints a portal URL linking directly to the results.
 
+### Cloud AI Red Teaming (single agent)
+
+Run Foundry cloud red teaming against one target agent (default: Advisor) using taxonomy-driven attack generation and built-in safety evaluators.
+
+```bash
+az login
+python evals/run_redteam.py
+
+# optional overrides
+python evals/run_redteam.py --agent-name va-loan-advisor-iq --attack-strategies Flip Base64 IndirectJailbreak --num-turns 5
+```
+
+Required environment variables:
+- `FOUNDRY_PROJECT_ENDPOINT` (or `AZURE_AI_PROJECT_ENDPOINT`)
+- `FOUNDRY_MODEL_DEPLOYMENT` (or `AZURE_AI_MODEL_DEPLOYMENT_NAME`) for task-adherence scoring
+
+The script creates/reuses a red-team eval group, creates a prohibited-actions taxonomy, runs server-side attacks, then saves output items to `evals/redteam_outputs/`.
+
+Note: cloud red teaming availability is region-dependent. If your Foundry project is in an unsupported region, run this script against a Foundry project in a supported region.
+
 ---
 
 ## Project Structure
@@ -475,7 +495,8 @@ va-loan-concierge/
 ├── evals/                       # Agent evaluation datasets and runner
 │   ├── eval_advisor.jsonl       # 15 test queries for Advisor Agent
 │   ├── eval_orchestrator.jsonl  # 10 test queries for Orchestrator routing
-│   └── run_eval.py              # OpenAI Evals API runner (server-side)
+│   ├── run_eval.py              # OpenAI Evals API runner (server-side)
+│   └── run_redteam.py           # Foundry cloud AI red teaming runner (single target agent)
 │
 ├── scripts/
 │   └── create_guardrails.ps1    # Standalone guardrail policy creation
@@ -605,7 +626,7 @@ A Bing or web search grounding tool would surface any webpage matching the query
 
 CU also demonstrates a Foundry-native capability (GA tool, same resource as the model deployments) rather than a generic web search that any application can add.
 
-**CU model requirements:** Three deployed models are required — `gpt-4.1`, `gpt-4.1-mini`, and `text-embedding-3-large`. All three are deployed by `azd up` via `ai-services.bicep`.
+**CU model requirements:** CU needs three deployments — `gpt-4.1`, `gpt-4.1-mini`, and one embedding deployment. `azd up` now uses a region-safe embedding selection: primary `text-embedding-3-large`, then fallback to `text-embedding-3-small` (and optional second fallback `text-embedding-ada-002` for manual overrides).
 
 **Manual trigger for testing:**
 ```bash

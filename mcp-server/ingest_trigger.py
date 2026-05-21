@@ -30,28 +30,28 @@ Environment variables (set by Bicep + postprovision.ps1):
 
 import json
 import logging
-import os
-import sys
 
 import azure.functions as func
-from azure.identity import ManagedIdentityCredential
-
-# tools/content_ingestion.py is copied into mcp-server/tools/ before deployment.
-# See README.md "Content Understanding" → "Code Deployment" for the sync process.
-from tools.content_ingestion import NewsIngestionPipeline
 
 logger = logging.getLogger(__name__)
 
-# Register triggers on the FunctionApp instance defined in function_app.py.
-# Azure Functions requires exactly one FunctionApp instance per Python worker.
-# Importing 'app' here (after it's defined in function_app.py) attaches these
-# triggers to the same app without creating a second instance.
-from function_app import app
+# Register triggers on a Blueprint and let function_app.py attach it.
+bp = func.Blueprint()
+
+
+def _build_pipeline():
+    """Create the ingestion pipeline lazily to keep worker startup lightweight."""
+    from azure.identity import ManagedIdentityCredential
+    # tools/content_ingestion.py is copied into mcp-server/tools/ before deployment.
+    # See README.md "Content Understanding" -> "Code Deployment" for the sync process.
+    from tools.content_ingestion import NewsIngestionPipeline
+
+    return NewsIngestionPipeline(credential=ManagedIdentityCredential())
 
 
 # ── Timer Trigger — runs every 4 hours on the hour ────────────────────────────
 
-@app.timer_trigger(
+@bp.timer_trigger(
     arg_name="timer",
     schedule="0 0 */4 * * *",  # At 00:00, 04:00, 08:00, 12:00, 16:00, 20:00 UTC
     run_on_startup=False,       # Don't run immediately on cold start — wait for schedule
@@ -65,7 +65,7 @@ def ingest_timer(timer: func.TimerRequest) -> None:
         logger.warning("ingest_timer: timer is past due — running now")
 
     logger.info("ingest_timer: starting scheduled ingestion")
-    pipeline = NewsIngestionPipeline(credential=ManagedIdentityCredential())
+    pipeline = _build_pipeline()
     pipeline.ensure_analyzer()
     stats = pipeline.run()
     logger.info("ingest_timer: complete — %s", stats)
@@ -73,7 +73,7 @@ def ingest_timer(timer: func.TimerRequest) -> None:
 
 # ── HTTP Trigger — manual invocation for testing ──────────────────────────────
 
-@app.route(route="ingest", methods=["POST"])
+@bp.route(route="ingest", methods=["POST"])
 def ingest_now(req: func.HttpRequest) -> func.HttpResponse:
     """
     Manual ingestion trigger for testing and on-demand refresh.
@@ -87,7 +87,7 @@ def ingest_now(req: func.HttpRequest) -> func.HttpResponse:
     """
     logger.info("ingest_now: manual ingestion triggered")
     try:
-        pipeline = NewsIngestionPipeline(credential=ManagedIdentityCredential())
+        pipeline = _build_pipeline()
         pipeline.ensure_analyzer()
         stats = pipeline.run()
         return func.HttpResponse(

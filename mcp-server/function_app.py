@@ -45,13 +45,19 @@ logger = logging.getLogger(__name__)
 
 app = func.FunctionApp(http_auth_level=func.AuthLevel.ANONYMOUS)
 
-# Import ingest_trigger AFTER `app` is defined — it calls @app.timer_trigger and
-# @app.route to register the news ingestion functions on this same app instance.
-import ingest_trigger  # noqa: F401, E402
+# Register optional trigger blueprints after app creation. Keep MCP alive even
+# if an optional trigger module fails to import.
+try:
+    from ingest_trigger import bp as ingest_bp
+    app.register_blueprint(ingest_bp)
+except Exception:
+    logger.exception("function_app: failed to register ingest_trigger; /ingest disabled")
 
-# Import newsletter_trigger AFTER `app` is defined — registers the weekly digest
-# timer and on-demand HTTP trigger on this same app instance.
-import newsletter_trigger  # noqa: F401, E402
+try:
+    from newsletter_trigger import bp as newsletter_bp
+    app.register_blueprint(newsletter_bp)
+except Exception:
+    logger.exception("function_app: failed to register newsletter_trigger; /newsletter disabled")
 
 _PROTOCOL_VERSION = "2024-11-05"
 _SERVER_INFO = {"name": "va-loan-tools", "version": "1.0.0"}
@@ -74,8 +80,8 @@ def _err(request_id: object, code: int, message: str) -> func.HttpResponse:
     )
 
 
-@app.route(route="mcp", methods=["GET", "POST", "DELETE"])
-async def mcp(req: func.HttpRequest) -> func.HttpResponse:
+@app.route(route="mcp", methods=["GET", "POST", "DELETE", "HEAD", "OPTIONS"])
+def mcp(req: func.HttpRequest) -> func.HttpResponse:
     """
     MCP Streamable HTTP endpoint.
 
@@ -86,13 +92,17 @@ async def mcp(req: func.HttpRequest) -> func.HttpResponse:
     """
     # GET and DELETE are part of the SSE session management handshake;
     # return 200 so the Foundry runtime doesn't treat them as errors.
-    if req.method in ("GET", "DELETE"):
+    if req.method in ("GET", "DELETE", "HEAD", "OPTIONS"):
         return func.HttpResponse(status_code=200)
 
     try:
         body = req.get_json()
     except ValueError:
-        return _err(None, -32700, "Parse error")
+        try:
+            raw = req.get_body().decode("utf-8")
+            body = json.loads(raw) if raw else {}
+        except Exception:
+            return _err(None, -32700, "Parse error")
 
     method = body.get("method", "")
     request_id = body.get("id")

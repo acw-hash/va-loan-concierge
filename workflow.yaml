@@ -23,7 +23,7 @@ trigger:
       value: =false
 
     # ── Step 1: Orchestrator classifies the query ─────────────────────
-    # Returns {"needs_advisor": bool, "needs_calculator": bool, "needs_scheduler": bool, "needs_newsletter": bool}
+    # Returns {"needs_advisor": bool, "needs_calculator": bool, "needs_scheduler": bool, "needs_newsletter": bool, "needs_rate_intelligence": bool}
     - kind: InvokeAzureAgent
       id: classify
       agent:
@@ -199,6 +199,26 @@ trigger:
                           activity: "I didn't quite understand that, but no problem — we'll keep moving."
 
     # ══════════════════════════════════════════════════════════════════
+    # Step 2c: Rate Intelligence (if needed)
+    # No HIL — invokes the hosted LangGraph container directly.
+    # ══════════════════════════════════════════════════════════════════
+    - kind: ConditionGroup
+      id: check_rate_intelligence
+      conditions:
+        - id: run_rate_intelligence
+          condition: =Local.Route.needs_rate_intelligence
+          actions:
+            - kind: InvokeAzureAgent
+              id: rate_intelligence
+              agent:
+                name: rate-intelligence-agent
+              input:
+                messages: =Local.LatestMessage
+              output:
+                messages: Local.LatestMessage
+                autoSend: true
+
+    # ══════════════════════════════════════════════════════════════════
     # Step 4: Scheduler + Calendar HIL (if needed and not early-exited)
     #
     # Flow: run scheduler → confirm/reschedule/decline →
@@ -296,7 +316,7 @@ trigger:
       id: check_general
       conditions:
         - id: general_query
-          condition: =Not(Or(Local.Route.needs_advisor, Local.Route.needs_calculator, Local.Route.needs_scheduler, Local.Route.needs_newsletter))
+          condition: =Not(Or(Local.Route.needs_advisor, Local.Route.needs_calculator, Local.Route.needs_scheduler, Local.Route.needs_newsletter, Local.Route.needs_rate_intelligence))
           actions:
             - kind: SendActivity
               id: general_response

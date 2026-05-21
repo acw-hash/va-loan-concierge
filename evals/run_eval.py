@@ -22,6 +22,7 @@ Results appear in the Foundry portal: Build > Evaluations
 """
 
 import argparse
+import asyncio
 import json
 import logging
 import os
@@ -50,6 +51,31 @@ ADVISOR_EVAL_DATASET = os.path.join(os.path.dirname(__file__), "eval_advisor.jso
 ORCHESTRATOR_EVAL_DATASET = os.path.join(os.path.dirname(__file__), "eval_orchestrator.jsonl")
 
 POLL_INTERVAL = 10  # seconds between status checks
+
+
+def _refresh_advisor_agent_version() -> None:
+    """Register the latest Advisor agent version from local code.
+
+    Some stale versions can return only tool-approval requests during eval
+    runs, which leaves sample.output_text empty and causes evaluator errors.
+    Refreshing ensures evals target the latest Advisor definition.
+    """
+    try:
+        from agents.advisor_agent import AdvisorAgent
+
+        async def _refresh() -> None:
+            agent = AdvisorAgent()
+            await agent.initialize()
+            logger.info("  Refreshed Advisor agent to version: %s", agent.agent_version)
+            await agent.close()
+
+        logger.info("  Refreshing Advisor agent definition...")
+        asyncio.run(_refresh())
+    except Exception as exc:
+        logger.warning(
+            "  Could not refresh Advisor agent definition; continuing with existing version (%s)",
+            exc,
+        )
 
 
 def _get_project_client() -> AIProjectClient:
@@ -288,6 +314,7 @@ def _run_agent_eval(
 
 def run_advisor_eval() -> str | None:
     """Run evaluations against the Advisor Agent."""
+    _refresh_advisor_agent_version()
     return _run_agent_eval(
         agent_name=ADVISOR_AGENT_NAME,
         dataset_path=ADVISOR_EVAL_DATASET,

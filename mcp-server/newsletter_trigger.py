@@ -48,11 +48,10 @@ import os
 
 import azure.functions as func
 
-# Register triggers on the FunctionApp instance defined in function_app.py.
-# Azure Functions requires exactly one FunctionApp instance per Python worker.
-from function_app import app
-
 logger = logging.getLogger(__name__)
+
+# Register triggers on a Blueprint and let function_app.py attach it.
+bp = func.Blueprint()
 
 
 # ── Shared helper ─────────────────────────────────────────────────────────────
@@ -101,7 +100,7 @@ def _run_newsletter(period_days: int = 7) -> dict:
 
 # ── Timer Trigger — every Monday at 09:00 UTC ─────────────────────────────────
 
-@app.timer_trigger(
+@bp.timer_trigger(
     arg_name="timer",
     schedule="0 0 9 * * 1",   # Every Monday at 09:00 UTC
     run_on_startup=False,      # Don't run on cold start — wait for schedule
@@ -126,7 +125,7 @@ def newsletter_timer(timer: func.TimerRequest) -> None:
 
 # ── HTTP Trigger — manual/on-demand invocation ────────────────────────────────
 
-@app.route(route="newsletter", methods=["POST"])
+@bp.route(route="newsletter", methods=["POST"])
 def newsletter_now(req: func.HttpRequest) -> func.HttpResponse:
     """
     On-demand newsletter trigger for testing and manual generation.

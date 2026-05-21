@@ -353,22 +353,9 @@ class NewsIngestionPipeline:
         cu = self._get_cu_client()
         analyzer_name = os.environ["CU_ANALYZER_NAME"]
 
-        # Skip creation if the analyzer already exists.
-        try:
-            existing = cu.get_analyzer(analyzer_name)
-            logger.info(
-                "content_ingestion: analyzer '%s' already exists (status=%s)",
-                analyzer_name, existing.status,
-            )
-            return
-        except Exception:
-            pass  # 404 Not Found — proceed to create.
-
-        logger.info("content_ingestion: creating CU analyzer '%s'", analyzer_name)
-
-        # Step 1: Set resource-level model defaults.
-        # CU uses these to route "gpt-4.1" → the actual deployment name in your project.
-        # All three are required even if only gpt-4.1 is used by this analyzer.
+        # Step 1: Set resource-level model defaults on every run.
+        # Existing analyzers still depend on these defaults; refreshing them is
+        # idempotent and prevents runtime failures after app setting changes.
         completion_deployment = os.environ["CU_COMPLETION_DEPLOYMENT"]
         mini_deployment = os.environ["CU_MINI_MODEL_DEPLOYMENT"]
         large_embedding = os.environ["CU_LARGE_EMBEDDING_DEPLOYMENT"]
@@ -384,17 +371,31 @@ class NewsIngestionPipeline:
             completion_deployment, mini_deployment, large_embedding,
         )
 
+        # Skip creation if the analyzer already exists.
+        try:
+            existing = cu.get_analyzer(analyzer_name)
+            logger.info(
+                "content_ingestion: analyzer '%s' already exists (status=%s)",
+                analyzer_name, existing.status,
+            )
+            return
+        except Exception:
+            pass  # 404 Not Found — proceed to create.
+
+        logger.info("content_ingestion: creating CU analyzer '%s'", analyzer_name)
+
         # Step 2: Create the analyzer.
         # base_analyzer_id="prebuilt-document" handles HTML and plain text input.
-        # models uses CU's internal "completion"/"embedding" keys — not model names.
+        # models uses CU's internal "completion"/"embedding" keys with model names.
+        # CU resolves these through the defaults mapping configured above.
         analyzer = ContentAnalyzer(
             analyzer_id=analyzer_name,
             description="VA mortgage news structured extraction analyzer",
             base_analyzer_id="prebuilt-document",
             field_schema=_ANALYZER_SCHEMA,
             models={
-                "completion": completion_deployment,
-                "embedding":  large_embedding,
+                "completion": "gpt-4.1",
+                "embedding":  "text-embedding-3-large",
             },
         )
 
